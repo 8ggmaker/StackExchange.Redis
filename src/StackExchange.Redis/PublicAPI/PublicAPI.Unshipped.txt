@@ -1,1 +1,5 @@
 ﻿#nullable enable
+StackExchange.Redis.ISubscriber.SubscribeLease(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>! handler, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
+StackExchange.Redis.ISubscriber.SubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>! handler, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!
+StackExchange.Redis.ISubscriber.UnsubscribeLease(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>? handler = null, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
+StackExchange.Redis.ISubscriber.UnsubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>? handler = null, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!
