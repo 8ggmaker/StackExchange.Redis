@@ -1966,11 +1966,11 @@ namespace StackExchange.Redis
                 }
             }
 
-            static bool TryGetPubSubPayload(in RawResult value, out RedisValue parsed, bool allowArraySingleton = true)
+            static bool TryGetPubSubPayload(in RawResult value, out RawResult resolved, bool allowArraySingleton = true)
             {
                 if (value.IsNull)
                 {
-                    parsed = RedisValue.Null;
+                    resolved = value;
                     return true;
                 }
                 switch (value.Resp2TypeBulkString)
@@ -1978,12 +1978,12 @@ namespace StackExchange.Redis
                     case ResultType.Integer:
                     case ResultType.SimpleString:
                     case ResultType.BulkString:
-                        parsed = value.AsRedisValue();
+                        resolved = value;
                         return true;
                     case ResultType.Array when allowArraySingleton && value.ItemsCount == 1:
-                        return TryGetPubSubPayload(in value[0], out parsed, allowArraySingleton: false);
+                        return TryGetPubSubPayload(in value[0], out resolved, allowArraySingleton: false);
                 }
-                parsed = default;
+                resolved = default;
                 return false;
             }
 

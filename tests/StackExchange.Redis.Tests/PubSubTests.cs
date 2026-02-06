@@ -812,4 +812,202 @@ public class PubSubTests(ITestOutputHelper output, SharedConnectionFixture fixtu
             Assert.True(didUpdate);
         }
     }
+
+    [Fact]
+    public async Task TestSubscribeLeaseBasic()
+    {
+        await using var conn = Create(shared: false, log: Writer);
+
+        var pub = GetAnyPrimary(conn);
+        var sub = conn.GetSubscriber();
+        await PingAsync(pub, sub).ForAwait();
+
+        RedisChannel channel = RedisChannel.Literal(Me());
+        byte[]? received = null;
+        int handlerCount = 0;
+
+        sub.SubscribeLease(channel, (ch, lease) =>
+        {
+            // Copy the data out before the lease is disposed
+            Interlocked.Exchange(ref received, lease.Span.ToArray());
+            Interlocked.Increment(ref handlerCount);
+        });
+
+        await PingAsync(pub, sub).ForAwait();
+        sub.Publish(channel, "hello lease");
+        await UntilConditionAsync(TimeSpan.FromSeconds(5), () => Volatile.Read(ref handlerCount) == 1);
+
+        Assert.Equal(1, Volatile.Read(ref handlerCount));
+        Assert.NotNull(received);
+        Assert.Equal("hello lease", Encoding.UTF8.GetString(received!));
+    }
+
+    [Fact]
+    public async Task TestSubscribeLeaseAsync()
+    {
+        await using var conn = Create(shared: false, log: Writer);
+
+        var pub = GetAnyPrimary(conn);
+        var sub = conn.GetSubscriber();
+        await PingAsync(pub, sub).ForAwait();
+
+        RedisChannel channel = RedisChannel.Literal(Me());
+        byte[]? received = null;
+        int handlerCount = 0;
+
+        await sub.SubscribeLeaseAsync(channel, (ch, lease) =>
+        {
+            Interlocked.Exchange(ref received, lease.Span.ToArray());
+            Interlocked.Increment(ref handlerCount);
+        }).ForAwait();
+
+        await PingAsync(pub, sub).ForAwait();
+        await sub.PublishAsync(channel, "hello lease async").ForAwait();
+        await UntilConditionAsync(TimeSpan.FromSeconds(5), () => Volatile.Read(ref handlerCount) == 1);
+
+        Assert.Equal(1, Volatile.Read(ref handlerCount));
+        Assert.NotNull(received);
+        Assert.Equal("hello lease async", Encoding.UTF8.GetString(received!));
+    }
+
+    [Fact]
+    public async Task TestSubscribeLeaseMultipleMessages()
+    {
+        await using var conn = Create(shared: false, log: Writer);
+
+        var pub = GetAnyPrimary(conn);
+        var sub = conn.GetSubscriber();
+        await PingAsync(pub, sub).ForAwait();
+
+        RedisChannel channel = RedisChannel.Literal(Me());
+        const int count = 50;
+        int handlerCount = 0;
+        var receivedMessages = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        await sub.SubscribeLeaseAsync(channel, (ch, lease) =>
+        {
+            receivedMessages.Add(Encoding.UTF8.GetString(lease.Span.ToArray()));
+            Interlocked.Increment(ref handlerCount);
+        }).ForAwait();
+
+        await PingAsync(pub, sub).ForAwait();
+        for (int i = 0; i < count; i++)
+        {
+            sub.Publish(channel, $"msg-{i}", CommandFlags.FireAndForget);
+        }
+
+        await UntilConditionAsync(TimeSpan.FromSeconds(10), () => Volatile.Read(ref handlerCount) == count);
+
+        Assert.Equal(count, Volatile.Read(ref handlerCount));
+        Assert.Equal(count, receivedMessages.Count);
+        for (int i = 0; i < count; i++)
+        {
+            Assert.Contains($"msg-{i}", receivedMessages);
+        }
+    }
+
+    [Fact]
+    public async Task TestSubscribeLeaseAndRegularHandlerCoexist()
+    {
+        await using var conn = Create(shared: false, log: Writer);
+
+        var pub = GetAnyPrimary(conn);
+        var sub = conn.GetSubscriber();
+        await PingAsync(pub, sub).ForAwait();
+
+        RedisChannel channel = RedisChannel.Literal(Me());
+        string? leaseReceived = null;
+        string? regularReceived = null;
+        int leaseCount = 0, regularCount = 0;
+
+        // Subscribe with both handler types on the same channel
+        await sub.SubscribeLeaseAsync(channel, (ch, lease) =>
+        {
+            Interlocked.Exchange(ref leaseReceived, Encoding.UTF8.GetString(lease.Span.ToArray()));
+            Interlocked.Increment(ref leaseCount);
+        }).ForAwait();
+
+        await sub.SubscribeAsync(channel, (ch, val) =>
+        {
+            Interlocked.Exchange(ref regularReceived, (string?)val);
+            Interlocked.Increment(ref regularCount);
+        }).ForAwait();
+
+        await PingAsync(pub, sub).ForAwait();
+        await sub.PublishAsync(channel, "coexist").ForAwait();
+        await UntilConditionAsync(
+            TimeSpan.FromSeconds(5),
+            () => Volatile.Read(ref leaseCount) == 1 && Volatile.Read(ref regularCount) == 1);
+
+        Assert.Equal(1, Volatile.Read(ref leaseCount));
+        Assert.Equal(1, Volatile.Read(ref regularCount));
+        Assert.Equal("coexist", leaseReceived);
+        Assert.Equal("coexist", regularReceived);
+    }
+
+    [Fact]
+    public async Task TestUnsubscribeLease()
+    {
+        await using var conn = Create(shared: false, log: Writer);
+
+        var pub = GetAnyPrimary(conn);
+        var sub = conn.GetSubscriber();
+        await PingAsync(pub, sub).ForAwait();
+
+        RedisChannel channel = RedisChannel.Literal(Me());
+        int handlerCount = 0;
+
+        Action<RedisChannel, Lease<byte>> handler = (ch, lease) =>
+        {
+            Interlocked.Increment(ref handlerCount);
+        };
+
+        await sub.SubscribeLeaseAsync(channel, handler).ForAwait();
+        await PingAsync(pub, sub).ForAwait();
+
+        // First publish should be received
+        await sub.PublishAsync(channel, "before unsub").ForAwait();
+        await UntilConditionAsync(TimeSpan.FromSeconds(5), () => Volatile.Read(ref handlerCount) == 1);
+        Assert.Equal(1, Volatile.Read(ref handlerCount));
+
+        // Unsubscribe, then publish should NOT be received
+        await sub.UnsubscribeLeaseAsync(channel, handler).ForAwait();
+        await PingAsync(pub, sub).ForAwait();
+        await sub.PublishAsync(channel, "after unsub").ForAwait();
+        await PingAsync(pub, sub).ForAwait();
+        await AllowReasonableTimeToPublishAndProcess().ForAwait();
+        Assert.Equal(1, Volatile.Read(ref handlerCount));
+    }
+
+    [Fact]
+    public async Task TestSubscribeLeaseDataIntegrity()
+    {
+        await using var conn = Create(shared: false, log: Writer);
+
+        var pub = GetAnyPrimary(conn);
+        var sub = conn.GetSubscriber();
+        await PingAsync(pub, sub).ForAwait();
+
+        RedisChannel channel = RedisChannel.Literal(Me());
+        byte[]? received = null;
+        int handlerCount = 0;
+
+        // Publish binary data that isn't valid UTF-8
+        var binaryPayload = new byte[] { 0x00, 0x01, 0xFF, 0xFE, 0x42, 0x00 };
+
+        await sub.SubscribeLeaseAsync(channel, (ch, lease) =>
+        {
+            Assert.Equal(binaryPayload.Length, lease.Length);
+            Interlocked.Exchange(ref received, lease.Span.ToArray());
+            Interlocked.Increment(ref handlerCount);
+        }).ForAwait();
+
+        await PingAsync(pub, sub).ForAwait();
+        await sub.PublishAsync(channel, binaryPayload).ForAwait();
+        await UntilConditionAsync(TimeSpan.FromSeconds(5), () => Volatile.Read(ref handlerCount) == 1);
+
+        Assert.Equal(1, Volatile.Read(ref handlerCount));
+        Assert.NotNull(received);
+        Assert.Equal(binaryPayload, received!);
+    }
 }
