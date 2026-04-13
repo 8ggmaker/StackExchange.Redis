@@ -6,6 +6,13 @@ Current package versions:
 | ------------ | ----------------- | ----- |
 | [![StackExchange.Redis](https://img.shields.io/nuget/v/StackExchange.Redis.svg)](https://www.nuget.org/packages/StackExchange.Redis/) | [![StackExchange.Redis](https://img.shields.io/nuget/vpre/StackExchange.Redis.svg)](https://www.nuget.org/packages/StackExchange.Redis/) | [![StackExchange.Redis MyGet](https://img.shields.io/myget/stackoverflow/vpre/StackExchange.Redis.svg)](https://www.myget.org/feed/stackoverflow/package/nuget/StackExchange.Redis) |
 
+## 2.10.14
+
+- Fix bug with connection startup failing in low-memory scenarios ([#3002 by nathan-miller23](https://github.com/StackExchange/StackExchange.Redis/pull/3002))
+- Fix under-count of `TotalOutstanding` in server-counters ([#2996 by nathan-miller23](https://github.com/StackExchange/StackExchange.Redis/pull/2996))
+- Fix incorrect debug assertion in `HGETEX` (no impact to release library) ([#2999 by mgravell](https://github.com/StackExchange/StackExchange.Redis/pull/2999))
+
+
 ## 2.10.1
 
 - Support Redis 8.4 CAS/CAD operations (`DIGEST`, and the `IFEQ`, `IFNE`, `IFDEQ`, `IFDNE` modifiers on `SET` / `DEL`)
