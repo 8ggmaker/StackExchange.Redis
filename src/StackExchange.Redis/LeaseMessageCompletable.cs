@@ -5,16 +5,17 @@ using Pipelines.Sockets.Unofficial;
 namespace StackExchange.Redis
 {
     /// <summary>
-    /// An <see cref="ICompletable"/> that invokes lease-based subscription handlers with a pooled <see cref="Lease{T}"/>,
-    /// and disposes the lease after all handlers have completed.
+    /// An <see cref="ICompletable"/> that invokes lease-based subscription handlers with a <see cref="RefCountedLease{T}"/>.
+    /// Each handler receives its own <see cref="RefCountedLease{T}"/> that shares the same underlying pooled buffer.
+    /// The buffer is returned to the pool only when every handler has called <see cref="RefCountedLease{T}.Dispose"/>.
     /// </summary>
     internal sealed class LeaseMessageCompletable : ICompletable
     {
         private readonly RedisChannel channel;
-        private readonly Lease<byte> lease;
-        private readonly Action<RedisChannel, Lease<byte>> handler;
+        private readonly RefCountedLease<byte> lease;
+        private readonly Action<RedisChannel, RefCountedLease<byte>> handler;
 
-        public LeaseMessageCompletable(RedisChannel channel, Lease<byte> lease, Action<RedisChannel, Lease<byte>> handler)
+        public LeaseMessageCompletable(RedisChannel channel, RefCountedLease<byte> lease, Action<RedisChannel, RefCountedLease<byte>> handler)
         {
             this.channel = channel;
             this.lease = lease;
@@ -27,28 +28,21 @@ namespace StackExchange.Redis
         {
             if (isAsync)
             {
-                try
+                if (handler != null)
                 {
-                    if (handler != null)
+                    ConnectionMultiplexer.TraceWithoutContext("Invoking lease (async)...: " + (string?)channel, "Subscription");
+                    if (handler.IsSingle())
                     {
-                        ConnectionMultiplexer.TraceWithoutContext("Invoking lease (async)...: " + (string?)channel, "Subscription");
-                        if (handler.IsSingle())
-                        {
-                            try { handler(channel, lease); } catch { }
-                        }
-                        else
-                        {
-                            foreach (var sub in handler.AsEnumerable())
-                            {
-                                try { sub.Invoke(channel, lease); } catch { }
-                            }
-                        }
-                        ConnectionMultiplexer.TraceWithoutContext("Invoke lease complete (async)", "Subscription");
+                        try { handler(channel, lease); } catch { }
                     }
-                }
-                finally
-                {
-                    lease.Dispose();
+                    else
+                    {
+                        foreach (var sub in handler.AsEnumerable())
+                        {
+                            try { sub.Invoke(channel, lease); } catch { }
+                        }
+                    }
+                    ConnectionMultiplexer.TraceWithoutContext("Invoke lease complete (async)", "Subscription");
                 }
                 return true;
             }

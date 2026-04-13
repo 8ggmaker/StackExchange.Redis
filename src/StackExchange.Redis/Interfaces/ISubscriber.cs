@@ -119,8 +119,10 @@ namespace StackExchange.Redis
 
         /// <summary>
         /// Subscribe to perform some operation when a message to the preferred/active node is broadcast, without any guarantee of ordered handling.
-        /// The handler receives a <see cref="Lease{T}"/> backed by a pooled array, reducing garbage collection pressure compared to <see cref="RedisValue"/>-based handlers.
-        /// The lease is disposed automatically after all handlers complete; handlers must not retain a reference to the lease beyond the callback.
+        /// The handler receives a <see cref="RefCountedLease{T}"/> backed by a pooled array, reducing garbage collection pressure compared to <see cref="RedisValue"/>-based handlers.
+        /// The handler is responsible for calling <see cref="RefCountedLease{T}.Dispose"/> when it is done with the data.
+        /// When multiple handlers are subscribed to the same channel, they share the same underlying buffer;
+        /// the pooled array is returned only after all handlers have disposed their reference.
         /// </summary>
         /// <param name="channel">The channel to subscribe to.</param>
         /// <param name="handler">The handler to invoke when a message is received on <paramref name="channel"/>.</param>
@@ -130,10 +132,27 @@ namespace StackExchange.Redis
         /// <seealso href="https://redis.io/commands/subscribe"/>,
         /// <seealso href="https://redis.io/commands/psubscribe"/>.
         /// </remarks>
-        void SubscribeLease(RedisChannel channel, Action<RedisChannel, Lease<byte>> handler, CommandFlags flags = CommandFlags.None);
+        void SubscribeLease(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>> handler, CommandFlags flags = CommandFlags.None);
 
-        /// <inheritdoc cref="SubscribeLease(RedisChannel, Action{RedisChannel, Lease{byte}}, CommandFlags)"/>
-        Task SubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, Lease<byte>> handler, CommandFlags flags = CommandFlags.None);
+        /// <inheritdoc cref="SubscribeLease(RedisChannel, Action{RedisChannel, RefCountedLease{byte}}, CommandFlags)"/>
+        Task SubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>> handler, CommandFlags flags = CommandFlags.None);
+
+        /// <summary>
+        /// Subscribe to a specified message channel, returning a <see cref="ChannelLeaseMessageQueue"/> that can be used
+        /// to consume messages with pooled buffers. Each message's <see cref="RefCountedLease{T}"/> must be disposed by the consumer.
+        /// </summary>
+        /// <param name="channel">The channel to subscribe to.</param>
+        /// <param name="flags">The command flags to use.</param>
+        /// <returns>A queue of lease-based messages.</returns>
+        /// <remarks>
+        /// See
+        /// <seealso href="https://redis.io/commands/subscribe"/>,
+        /// <seealso href="https://redis.io/commands/psubscribe"/>.
+        /// </remarks>
+        ChannelLeaseMessageQueue SubscribeLease(RedisChannel channel, CommandFlags flags);
+
+        /// <inheritdoc cref="SubscribeLease(RedisChannel, CommandFlags)"/>
+        Task<ChannelLeaseMessageQueue> SubscribeLeaseAsync(RedisChannel channel, CommandFlags flags);
 
         /// <summary>
         /// Unsubscribe a lease-based handler from a specified message channel.
@@ -148,9 +167,9 @@ namespace StackExchange.Redis
         /// <seealso href="https://redis.io/commands/unsubscribe"/>,
         /// <seealso href="https://redis.io/commands/punsubscribe"/>.
         /// </remarks>
-        void UnsubscribeLease(RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler = null, CommandFlags flags = CommandFlags.None);
+        void UnsubscribeLease(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler = null, CommandFlags flags = CommandFlags.None);
 
-        /// <inheritdoc cref="UnsubscribeLease(RedisChannel, Action{RedisChannel, Lease{byte}}?, CommandFlags)"/>
-        Task UnsubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler = null, CommandFlags flags = CommandFlags.None);
+        /// <inheritdoc cref="UnsubscribeLease(RedisChannel, Action{RedisChannel, RefCountedLease{byte}}?, CommandFlags)"/>
+        Task UnsubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler = null, CommandFlags flags = CommandFlags.None);
     }
 }

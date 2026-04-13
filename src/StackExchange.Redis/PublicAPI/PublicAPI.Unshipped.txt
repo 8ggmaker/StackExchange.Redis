@@ -1,5 +1,37 @@
 ﻿#nullable enable
-StackExchange.Redis.ISubscriber.SubscribeLease(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>! handler, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
-StackExchange.Redis.ISubscriber.SubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>! handler, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!
-StackExchange.Redis.ISubscriber.UnsubscribeLease(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>? handler = null, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
-StackExchange.Redis.ISubscriber.UnsubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.Lease<byte>!>? handler = null, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!
+StackExchange.Redis.RefCountedLease<T>
+StackExchange.Redis.RefCountedLease<T>.ArraySegment.get -> System.ArraySegment<T>
+StackExchange.Redis.RefCountedLease<T>.Dispose() -> void
+StackExchange.Redis.RefCountedLease<T>.Length.get -> int
+StackExchange.Redis.RefCountedLease<T>.Memory.get -> System.Memory<T>
+StackExchange.Redis.RefCountedLease<T>.Span.get -> System.Span<T>
+static StackExchange.Redis.RefCountedLease<T>.Empty.get -> StackExchange.Redis.RefCountedLease<T>!
+StackExchange.Redis.ChannelLeaseMessage
+StackExchange.Redis.ChannelLeaseMessage.ChannelLeaseMessage() -> void
+StackExchange.Redis.ChannelLeaseMessage.Channel.get -> StackExchange.Redis.RedisChannel
+StackExchange.Redis.ChannelLeaseMessage.Dispose() -> void
+StackExchange.Redis.ChannelLeaseMessage.Lease.get -> StackExchange.Redis.RefCountedLease<byte>!
+StackExchange.Redis.ChannelLeaseMessage.SubscriptionChannel.get -> StackExchange.Redis.RedisChannel
+override StackExchange.Redis.ChannelLeaseMessage.Equals(object? obj) -> bool
+override StackExchange.Redis.ChannelLeaseMessage.GetHashCode() -> int
+override StackExchange.Redis.ChannelLeaseMessage.ToString() -> string!
+static StackExchange.Redis.ChannelLeaseMessage.operator ==(StackExchange.Redis.ChannelLeaseMessage left, StackExchange.Redis.ChannelLeaseMessage right) -> bool
+static StackExchange.Redis.ChannelLeaseMessage.operator !=(StackExchange.Redis.ChannelLeaseMessage left, StackExchange.Redis.ChannelLeaseMessage right) -> bool
+StackExchange.Redis.ChannelLeaseMessageQueue
+StackExchange.Redis.ChannelLeaseMessageQueue.Channel.get -> StackExchange.Redis.RedisChannel
+StackExchange.Redis.ChannelLeaseMessageQueue.Completion.get -> System.Threading.Tasks.Task!
+StackExchange.Redis.ChannelLeaseMessageQueue.GetAsyncEnumerator(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerator<StackExchange.Redis.ChannelLeaseMessage>!
+StackExchange.Redis.ChannelLeaseMessageQueue.OnMessage(System.Action<StackExchange.Redis.ChannelLeaseMessage>! handler) -> void
+StackExchange.Redis.ChannelLeaseMessageQueue.OnMessage(System.Func<StackExchange.Redis.ChannelLeaseMessage, System.Threading.Tasks.Task!>! handler) -> void
+StackExchange.Redis.ChannelLeaseMessageQueue.ReadAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<StackExchange.Redis.ChannelLeaseMessage>
+override StackExchange.Redis.ChannelLeaseMessageQueue.ToString() -> string?
+StackExchange.Redis.ChannelLeaseMessageQueue.TryGetCount(out int count) -> bool
+StackExchange.Redis.ChannelLeaseMessageQueue.TryRead(out StackExchange.Redis.ChannelLeaseMessage item) -> bool
+StackExchange.Redis.ChannelLeaseMessageQueue.Unsubscribe(StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
+StackExchange.Redis.ChannelLeaseMessageQueue.UnsubscribeAsync(StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!
+StackExchange.Redis.ISubscriber.SubscribeLease(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.RefCountedLease<byte>!>! handler, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
+StackExchange.Redis.ISubscriber.SubscribeLease(StackExchange.Redis.RedisChannel channel, StackExchange.Redis.CommandFlags flags) -> StackExchange.Redis.ChannelLeaseMessageQueue!
+StackExchange.Redis.ISubscriber.SubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.RefCountedLease<byte>!>! handler, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!
+StackExchange.Redis.ISubscriber.SubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, StackExchange.Redis.CommandFlags flags) -> System.Threading.Tasks.Task<StackExchange.Redis.ChannelLeaseMessageQueue!>!
+StackExchange.Redis.ISubscriber.UnsubscribeLease(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.RefCountedLease<byte>!>? handler = null, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> void
+StackExchange.Redis.ISubscriber.UnsubscribeLeaseAsync(StackExchange.Redis.RedisChannel channel, System.Action<StackExchange.Redis.RedisChannel, StackExchange.Redis.RefCountedLease<byte>!>? handler = null, StackExchange.Redis.CommandFlags flags = StackExchange.Redis.CommandFlags.None) -> System.Threading.Tasks.Task!

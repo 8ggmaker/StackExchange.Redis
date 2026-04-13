@@ -85,7 +85,7 @@ namespace StackExchange.Redis
             if (!subscriptions.TryGetValue(subscription, out Subscription? sub)) return;
 
             // Lease handlers (pool-backed, avoids GC allocation)
-            ICompletable? leaseCompletable = sub.ForInvokeAsLease(channel, in rawPayload);
+            ICompletable? leaseCompletable = sub.ForInvokeAsLease(channel, in rawPayload, out ChannelLeaseMessageQueue? leaseQueues);
 
             // Regular handlers + queues (heap allocation for RedisValue if needed)
             ICompletable? completable = sub.ForInvoke(channel, in rawPayload, out ChannelMessageQueue? queues, out RedisValue payload);
@@ -93,6 +93,10 @@ namespace StackExchange.Redis
             if (queues != null)
             {
                 ChannelMessageQueue.WriteAll(ref queues, channel, payload);
+            }
+            if (leaseQueues != null)
+            {
+                ChannelLeaseMessageQueue.WriteAll(ref leaseQueues, channel, in rawPayload);
             }
             if (completable != null && !completable.TryComplete(false))
             {
@@ -167,9 +171,10 @@ namespace StackExchange.Redis
         internal sealed class Subscription
         {
             private Action<RedisChannel, RedisValue>? _handlers;
-            private Action<RedisChannel, Lease<byte>>? _leaseHandlers;
+            private Action<RedisChannel, RefCountedLease<byte>>? _leaseHandlers;
             private readonly object _handlersLock = new object();
             private ChannelMessageQueue? _queues;
+            private ChannelLeaseMessageQueue? _leaseQueues;
             private ServerEndPoint? CurrentServer;
             public CommandFlags Flags { get; }
             public ResultProcessor.TrackSubscriptionsProcessor Processor { get; }
@@ -238,11 +243,18 @@ namespace StackExchange.Redis
                 }
             }
 
-            public void Add(Action<RedisChannel, Lease<byte>> handler)
+            public void Add(Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue)
             {
-                lock (_handlersLock)
+                if (handler != null)
                 {
-                    _leaseHandlers += handler;
+                    lock (_handlersLock)
+                    {
+                        _leaseHandlers += handler;
+                    }
+                }
+                if (queue != null)
+                {
+                    ChannelLeaseMessageQueue.Combine(ref _leaseQueues, queue);
                 }
             }
 
@@ -262,7 +274,7 @@ namespace StackExchange.Redis
                 return _handlers == null & _queues == null & _leaseHandlers == null;
             }
 
-            public bool Remove(Action<RedisChannel, Lease<byte>>? handler)
+            public bool Remove(Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue)
             {
                 if (handler != null)
                 {
@@ -271,7 +283,11 @@ namespace StackExchange.Redis
                         _leaseHandlers -= handler;
                     }
                 }
-                return _handlers == null & _queues == null & _leaseHandlers == null;
+                if (queue != null)
+                {
+                    ChannelLeaseMessageQueue.Remove(ref _leaseQueues, queue);
+                }
+                return _handlers == null & _queues == null & _leaseHandlers == null & _leaseQueues == null;
             }
 
             public ICompletable? ForInvoke(in RedisChannel channel, in RawResult rawPayload, out ChannelMessageQueue? queues, out RedisValue payload)
@@ -287,23 +303,27 @@ namespace StackExchange.Redis
                 return handlers == null ? null : new MessageCompletable(channel, payload, handlers);
             }
 
-            public ICompletable? ForInvokeAsLease(in RedisChannel channel, in RawResult rawPayload)
+            public ICompletable? ForInvokeAsLease(in RedisChannel channel, in RawResult rawPayload, out ChannelLeaseMessageQueue? leaseQueues)
             {
                 var handlers = _leaseHandlers;
+                leaseQueues = Volatile.Read(ref _leaseQueues);
+                if (handlers == null && leaseQueues == null) return null;
+
                 if (handlers == null) return null;
 
-                var lease = CreateLeaseFromPayload(in rawPayload);
+                int handlerCount = CountDelegate(handlers);
+                var lease = CreateRefCountedLeaseFromPayload(in rawPayload, handlerCount);
                 if (lease == null) return null;
 
                 return new LeaseMessageCompletable(channel, lease, handlers);
             }
 
-            private static Lease<byte>? CreateLeaseFromPayload(in RawResult rawPayload)
+            private static RefCountedLease<byte>? CreateRefCountedLeaseFromPayload(in RawResult rawPayload, int refCount)
             {
                 if (rawPayload.IsNull) return null;
                 var payload = rawPayload.Payload;
-                if (payload.IsEmpty) return Lease<byte>.Empty;
-                var lease = Lease<byte>.Create(checked((int)payload.Length), false);
+                if (payload.IsEmpty) return RefCountedLease<byte>.Empty;
+                var lease = RefCountedLease<byte>.Create(checked((int)payload.Length), refCount, clear: false);
                 payload.CopyTo(lease.Span);
                 return lease;
             }
@@ -316,11 +336,12 @@ namespace StackExchange.Redis
                     _leaseHandlers = null;
                 }
                 ChannelMessageQueue.MarkAllCompleted(ref _queues);
+                ChannelLeaseMessageQueue.MarkAllCompleted(ref _leaseQueues);
             }
 
             internal void GetSubscriberCounts(out int handlers, out int queues)
             {
-                queues = ChannelMessageQueue.Count(ref _queues);
+                queues = ChannelMessageQueue.Count(ref _queues) + ChannelLeaseMessageQueue.Count(ref _leaseQueues);
                 handlers = CountDelegate(_handlers) + CountDelegate(_leaseHandlers);
             }
 
@@ -478,17 +499,24 @@ namespace StackExchange.Redis
             return EnsureSubscribedToServer(sub, channel, flags, false);
         }
 
-        void ISubscriber.SubscribeLease(RedisChannel channel, Action<RedisChannel, Lease<byte>> handler, CommandFlags flags)
-            => SubscribeLease(channel, handler, flags);
+        void ISubscriber.SubscribeLease(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>> handler, CommandFlags flags)
+            => SubscribeLease(channel, handler, null, flags);
 
-        private bool SubscribeLease(RedisChannel channel, Action<RedisChannel, Lease<byte>> handler, CommandFlags flags)
+        private bool SubscribeLease(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue, CommandFlags flags)
         {
             ThrowIfNull(channel);
-            if (handler == null) { return true; }
+            if (handler == null && queue == null) { return true; }
 
             var sub = multiplexer.GetOrAddSubscription(channel, flags);
-            sub.Add(handler);
+            sub.Add(handler, queue);
             return EnsureSubscribedToServer(sub, channel, flags, false);
+        }
+
+        ChannelLeaseMessageQueue ISubscriber.SubscribeLease(RedisChannel channel, CommandFlags flags)
+        {
+            var queue = new ChannelLeaseMessageQueue(channel, this);
+            SubscribeLease(channel, null, queue, flags);
+            return queue;
         }
 
         internal bool EnsureSubscribedToServer(Subscription sub, RedisChannel channel, CommandFlags flags, bool internalCall)
@@ -545,16 +573,25 @@ namespace StackExchange.Redis
             return EnsureSubscribedToServerAsync(sub, channel, flags, false, server);
         }
 
-        Task ISubscriber.SubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, Lease<byte>> handler, CommandFlags flags)
-            => SubscribeLeaseAsync(channel, handler, flags);
+        Task ISubscriber.SubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>> handler, CommandFlags flags)
+            => SubscribeLeaseAsync(channel, handler, null, flags);
 
-        private Task<bool> SubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, Lease<byte>> handler, CommandFlags flags, ServerEndPoint? server = null)
+        Task<ChannelLeaseMessageQueue> ISubscriber.SubscribeLeaseAsync(RedisChannel channel, CommandFlags flags) => SubscribeLeaseAsync(channel, flags);
+
+        public async Task<ChannelLeaseMessageQueue> SubscribeLeaseAsync(RedisChannel channel, CommandFlags flags = CommandFlags.None, ServerEndPoint? server = null)
+        {
+            var queue = new ChannelLeaseMessageQueue(channel, this);
+            await SubscribeLeaseAsync(channel, null, queue, flags, server).ForAwait();
+            return queue;
+        }
+
+        private Task<bool> SubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue, CommandFlags flags, ServerEndPoint? server = null)
         {
             ThrowIfNull(channel);
-            if (handler == null) { return CompletedTask<bool>.Default(null); }
+            if (handler == null && queue == null) { return CompletedTask<bool>.Default(null); }
 
             var sub = multiplexer.GetOrAddSubscription(channel, flags);
-            sub.Add(handler);
+            sub.Add(handler, queue);
             return EnsureSubscribedToServerAsync(sub, channel, flags, false, server);
         }
 
@@ -605,24 +642,24 @@ namespace StackExchange.Redis
                 : CompletedTask<bool>.Default(asyncState);
         }
 
-        void ISubscriber.UnsubscribeLease(RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler, CommandFlags flags)
-            => UnsubscribeLease(channel, handler, flags);
+        void ISubscriber.UnsubscribeLease(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, CommandFlags flags)
+            => UnsubscribeLease(channel, handler, null, flags);
 
-        public bool UnsubscribeLease(in RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler, CommandFlags flags)
+        public bool UnsubscribeLease(in RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue, CommandFlags flags)
         {
             ThrowIfNull(channel);
-            return UnregisterSubscription(channel, handler, out var sub)
+            return UnregisterSubscription(channel, handler, queue, out var sub)
                 ? UnsubscribeFromServer(sub, channel, flags, false)
                 : true;
         }
 
-        Task ISubscriber.UnsubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler, CommandFlags flags)
-            => UnsubscribeLeaseAsync(channel, handler, flags);
+        Task ISubscriber.UnsubscribeLeaseAsync(RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, CommandFlags flags)
+            => UnsubscribeLeaseAsync(channel, handler, null, flags);
 
-        public Task<bool> UnsubscribeLeaseAsync(in RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler, CommandFlags flags)
+        internal Task<bool> UnsubscribeLeaseAsync(in RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue, CommandFlags flags)
         {
             ThrowIfNull(channel);
-            return UnregisterSubscription(channel, handler, out var sub)
+            return UnregisterSubscription(channel, handler, queue, out var sub)
                 ? UnsubscribeFromServerAsync(sub, channel, flags, asyncState, false)
                 : CompletedTask<bool>.Default(asyncState);
         }
@@ -667,23 +704,23 @@ namespace StackExchange.Redis
         /// Unregisters a lease handler and returns if we should remove the subscription from the server.
         /// </summary>
         /// <returns><see langword="true"/> if we should remove the subscription from the server, <see langword="false"/> otherwise.</returns>
-        private bool UnregisterSubscription(in RedisChannel channel, Action<RedisChannel, Lease<byte>>? handler, [NotNullWhen(true)] out Subscription? sub)
+        private bool UnregisterSubscription(in RedisChannel channel, Action<RedisChannel, RefCountedLease<byte>>? handler, ChannelLeaseMessageQueue? queue, [NotNullWhen(true)] out Subscription? sub)
         {
             ThrowIfNull(channel);
             if (multiplexer.TryGetSubscription(channel, out sub))
             {
-                if (handler == null)
+                if (handler == null & queue == null)
                 {
-                    // Blanket wipe of all lease handlers - only unsubscribe from server if ALL handler types are gone
-                    if (sub.Remove((Action<RedisChannel, Lease<byte>>?)null))
+                    // Blanket wipe of all lease handlers/queues - only unsubscribe from server if ALL handler types are gone
+                    if (sub.Remove((Action<RedisChannel, RefCountedLease<byte>>?)null, null))
                     {
                         multiplexer.TryRemoveSubscription(channel, out _);
                         return true;
                     }
                 }
-                else if (sub.Remove(handler))
+                else if (sub.Remove(handler, queue))
                 {
-                    // This was the last handler of any type, unsubscribe from server
+                    // This was the last handler/queue of any type, unsubscribe from server
                     multiplexer.TryRemoveSubscription(channel, out _);
                     return true;
                 }
